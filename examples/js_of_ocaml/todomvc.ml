@@ -23,7 +23,7 @@ module Storage = struct
     | Some v -> v
 end
 
-(* Application data *)
+(** Application data *)
 module Model = struct
 
   type visibility =
@@ -75,7 +75,7 @@ module Model = struct
 
 end
 
-(* User interface actions *)
+(** User interface actions *)
 module Action = struct
 
   type action =
@@ -92,11 +92,11 @@ module Action = struct
 
 end
 
-(* The user actions are sent in this stream *)
+(** The user actions are sent in this stream *)
 let stream, (send_in_stream : Action.action option -> unit) = Lwt_stream.create ()
 let send_some x = send_in_stream (Some x)
 
-(* Build HTML and send user actions *)
+(** Build HTML and send user actions *)
 module View = struct
 
   open Action
@@ -131,7 +131,7 @@ module View = struct
         task_input
       ])
 
-  (* One item in the tasks list *)
+  (** One item in the tasks list *)
   let todo_item (todo:Model.task) =
     let input_check =
       Html5.(input ~a:(
@@ -190,7 +190,7 @@ module View = struct
     ])
 
 
-  (* Build the tasks list *)
+  (** Build the tasks list *)
   let task_list visibility tasks =
     let is_visible todo =
       match visibility with
@@ -287,7 +287,7 @@ module View = struct
         ]
       ])
 
-  (* Build the HTML for the application *)
+  (** Build the HTML for the application *)
   let view m =
     Html5.(
       div ~a:[a_class ["todomvc-wrapper"]] [
@@ -300,89 +300,73 @@ module View = struct
       ])
 
   let refresh parent m =
-    let remove_child () =
-      let rec remove () =
-        let first = parent##firstChild in
-        Js.Opt.case first
-          (fun () -> ())
-          (fun e -> Dom.removeChild parent e; remove())
-      in
-      remove ()
+    let rec remove_children () =
+      Js.Opt.iter (parent##firstChild)
+        (fun e -> Dom.removeChild parent e; remove_children ())
     in
-    let () = remove_child () in
+    remove_child () ;
     Dom.appendChild parent (Tyxml_js.To_dom.of_div (view m))
 
 end
 
-(* Manage actions, refresh view if needed and save the state in local storage *)
+(** Manage actions, refresh view if needed and save the state in local storage *)
 module Controler =
 struct
 
   let update parent a m =
     let open Action in
     let open Model in
-    let m =
-      match a with
-      | Add -> (
-          let uid = m.uid + 1 in
-          let tasks =
-            let v = String.trim m.field in
-            if (v = "") then (
-              m.tasks
-            ) else (
-              (new_task v m.uid) :: m.tasks
-            )
-          in
-          { m with uid = uid; field = ""; tasks = tasks }
-        )
+    let m = match a with
+      | Add ->
+        let uid = m.uid + 1 in
+        let tasks =
+          let v = String.trim m.field in
+          if v = "" then m.tasks
+          else (new_task v m.uid) :: m.tasks
+        in
+        { m with uid = uid; field = ""; tasks = tasks }
+
       | Update_field field ->
-          { m with field = Js.to_string field }
-      | Editing_task (id, is_edit) -> (
-          let update_task t =
-            if (t.id = id) then (
-              let v = String.trim t.description in
-              { t with editing = is_edit; description = v; backup = v }
-            ) else (
-              t
-            )
-          in
-          let l = List.map update_task m.tasks in
-          let l = List.filter (fun e -> e.description <> "") l in
-          { m with tasks = l }
-        )
-      | Update_task (id, task) -> (
-          let update_task t =
-            if (t.id = id) then { t with description = Js.to_string task }
-            else t
-          in
-          { m with tasks = List.map update_task m.tasks }
-        )
+        { m with field = Js.to_string field }
+      | Editing_task (id, is_edit) ->
+        let update_task t =
+          if (t.id = id) then
+            let v = String.trim t.description in
+            { t with editing = is_edit; description = v; backup = v }
+          else t
+        in
+        let l = List.map update_task m.tasks in
+        let l = List.filter (fun e -> e.description <> "") l in
+        { m with tasks = l }
+      | Update_task (id, task) ->
+        let update_task t =
+          if (t.id = id) then { t with description = Js.to_string task }
+          else t
+        in
+        { m with tasks = List.map update_task m.tasks }
       | Delete id ->
-          { m with tasks = List.filter (fun e -> e.id <> id) m.tasks }
+        { m with tasks = List.filter (fun e -> e.id <> id) m.tasks }
       | Delete_complete ->
-          { m with tasks = List.filter (fun e -> not e.completed) m.tasks }
-      | Check (id, is_compl) -> (
-          let update_task t =
-            if (t.id = id) then { t with completed = is_compl }
-            else t
-          in
-          { m with tasks = List.map update_task m.tasks }
-        )
-      | Check_all is_compl -> (
-          let update_task t =
-            { t with completed = is_compl }
-          in
-          { m with tasks = List.map update_task m.tasks }
-        )
+        { m with tasks = List.filter (fun e -> not e.completed) m.tasks }
+      | Check (id, is_compl) ->
+        let update_task t =
+          if (t.id = id) then { t with completed = is_compl }
+          else t
+        in
+        { m with tasks = List.map update_task m.tasks }
+      | Check_all is_compl ->
+        let update_task t =
+          { t with completed = is_compl }
+        in
+        { m with tasks = List.map update_task m.tasks }
       | Change_visibility visibility ->
-          { m with visibility = visibility }
-      | Escape id -> (
-          let unedit_task t =
-            if (t.id = id) then { t with editing = false; description = t.backup }
-            else t
-          in
-          { m with tasks = List.map unedit_task m.tasks }
-        )
+        { m with visibility = visibility }
+      | Escape id ->
+        let unedit_task t =
+          if (t.id = id) then { t with editing = false; description = t.backup }
+          else t
+        in
+        { m with tasks = List.map unedit_task m.tasks }
     in
     begin match a with
       | Update_field _
@@ -406,19 +390,18 @@ let main _ =
   let m =
     match Url.Current.get() with
     | None -> m
-    | Some u -> (
-        let fragment =
-          match u with
-          | Url.Http h
-          | Url.Https h -> h.hu_fragment
-          | Url.File f -> f.fu_fragment
-        in
-        match fragment with
-        | "/" -> { m with Model.visibility = Model.All }
-        | "/active" -> { m with Model.visibility = Model.Active }
-        | "/completed" -> { m with Model.visibility = Model.Completed }
-        | _ -> m
-      )
+    | Some u ->
+      let fragment =
+        match u with
+        | Url.Http h
+        | Url.Https h -> h.hu_fragment
+        | Url.File f -> f.fu_fragment
+      in
+      match fragment with
+      | "/" -> { m with Model.visibility = Model.All }
+      | "/active" -> { m with Model.visibility = Model.Active }
+      | "/completed" -> { m with Model.visibility = Model.Completed }
+      | _ -> m
   in
   (* init the view *)
   let () = View.refresh parent m in
