@@ -2,8 +2,7 @@
 open Lwt.Infix
 
 (* Application data *)
-module Model =
-struct
+module Model = struct
 
   type visibility =
     Completed | Active | All
@@ -47,16 +46,15 @@ struct
     | All -> "All"
 
   let from_json s =
-    Json.from_string<t> s
+    Json.from_string<t> @@ Js.to_string s
 
   let to_json m =
-    Json.to_string<t> m
+    Js.string @@ Json.to_string<t> m
 
 end
 
 (* User interface actions *)
-module Action =
-struct
+module Action = struct
 
   type action =
     | Update_field of Js.js_string Js.t
@@ -77,8 +75,7 @@ let stream, (send_in_stream : Action.action option -> unit) = Lwt_stream.create 
 let send_some x = send_in_stream (Some x)
 
 (* Build HTML and send user actions *)
-module View =
-struct
+module View = struct
 
   open Action
   open Tyxml_js
@@ -333,65 +330,52 @@ struct
         )
       | Update_task (id, task) -> (
           let update_task t =
-            if (t.id = id) then (
-              { t with description = Js.to_string task }
-            ) else (
-              t
-            )
+            if (t.id = id) then { t with description = Js.to_string task }
+            else t
           in
-          { m with tasks = (List.map update_task m.tasks) }
+          { m with tasks = List.map update_task m.tasks }
         )
       | Delete id ->
-          { m with tasks = (List.filter (fun e -> e.id <> id) m.tasks) }
+          { m with tasks = List.filter (fun e -> e.id <> id) m.tasks }
       | Delete_complete ->
-          { m with tasks = (List.filter (fun e -> not e.completed) m.tasks) }
+          { m with tasks = List.filter (fun e -> not e.completed) m.tasks }
       | Check (id, is_compl) -> (
           let update_task t =
-            if (t.id = id) then (
-              { t with completed = is_compl }
-            ) else (
-              t
-            )
+            if (t.id = id) then { t with completed = is_compl }
+            else t
           in
-          { m with tasks = (List.map update_task m.tasks) }
+          { m with tasks = List.map update_task m.tasks }
         )
       | Check_all is_compl -> (
           let update_task t =
             { t with completed = is_compl }
           in
-          { m with tasks = (List.map update_task m.tasks) }
+          { m with tasks = List.map update_task m.tasks }
         )
       | Change_visibility visibility ->
           { m with visibility = visibility }
       | Escape id -> (
           let unedit_task t =
-            if (t.id = id) then (
-              { t with editing = false; description = t.backup }
-            ) else (
-              t
-            )
+            if (t.id = id) then { t with editing = false; description = t.backup }
+            else t
           in
-          { m with tasks = (List.map unedit_task m.tasks) }
+          { m with tasks = List.map unedit_task m.tasks }
         )
     in
-    let () =
-      match a with
+    begin match a with
       | Update_field _
       | Update_task _ -> ()
       | _ -> View.refresh parent m
-    in
-    let () =
-      let window = Dom_html.window in
-      let storage = window##localStorage in
-      Js.Optdef.case storage
-        (fun () -> ())
-        (fun storage -> storage##setItem(Js.string "jsoo-todo-state", Js.string (Model.to_json m)))
-    in
+    end ;
+    let window = Dom_html.window in
+    let storage = window##localStorage in
+    Js.Optdef.iter storage
+      (fun storage -> storage##setItem(Js.string "jsoo-todo-state", Model.to_json m)) ;
     m
 
 end
 
-let onload _ =
+let main _ =
   let doc = Dom_html.document in
   let parent =
     Js.Opt.get (doc##getElementById(Js.string "todomvc"))
@@ -433,15 +417,12 @@ let onload _ =
   (* main loop *)
   let rec run m =
     try_lwt
-      Lwt_stream.next stream >>= fun a -> (
-        let m = Controler.update parent a m in
-        run m;
-      )
+      lwt a = Lwt_stream.next stream in
+      let m = Controler.update parent a m in
+      run m
     with
     | Lwt_stream.Empty -> run m
   in
-  ignore (run m);
-  Js._false
+  run m
 
-let _ =
-  Dom_html.window##onload <- Dom_html.handler onload
+let _ = Lwt_js_events.onload () >>= main
