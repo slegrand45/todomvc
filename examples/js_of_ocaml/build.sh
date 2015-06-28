@@ -1,10 +1,12 @@
 #!/bin/sh
 ocamlbuild -use-ocamlfind \
+  -tags "warn(-40)" \
   -pkgs lwt.syntax,js_of_ocaml,js_of_ocaml.syntax,js_of_ocaml.tyxml,tyxml,js_of_ocaml.deriving,js_of_ocaml.deriving.syntax,deriving \
   -syntax camlp4o \
-  todomvc.byte
+  todomvc.byte ;
 
 js_of_ocaml +weak.js --opt 3 -o js/todomvc.js todomvc.byte
+
 
 # To disable JS linters at a file level, you can for instance use sed:
 # sed -i '' '1i\
@@ -13,4 +15,3 @@ js_of_ocaml +weak.js --opt 3 -o js/todomvc.js todomvc.byte
 # sed -i '' '1i\
 # /* jshint ignore:start */
 # ' js/todomvc.js
-
