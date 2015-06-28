@@ -6,11 +6,11 @@ ocamlbuild -use-ocamlfind \
 
 js_of_ocaml +weak.js --opt 3 -o js/todomvc.js todomvc.byte
 
-# Avoid JS linters (hard to apply for auto generated JS)
-sed -i '' '1i\
-// jscs:disable
-' js/todomvc.js
-sed -i '' '1i\
-/* jshint ignore:start */
-' js/todomvc.js
+# To disable JS linters at a file level, you can for instance use sed:
+# sed -i '' '1i\
+# // jscs:disable
+# ' js/todomvc.js
+# sed -i '' '1i\
+# /* jshint ignore:start */
+# ' js/todomvc.js
 
