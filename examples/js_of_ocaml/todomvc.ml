@@ -1,6 +1,28 @@
 
 open Lwt.Infix
 
+(** Utility module for local storage. *)
+module Storage = struct
+  open Js
+
+  let storage =
+    Optdef.case (Dom_html.window##localStorage)
+      (fun () -> failwith "Storage is not supported by this browser")
+      (fun v -> v)
+
+  let key = string "jsoo-todo-state"
+
+  let find () =
+    let r = storage##getItem(key) in
+    Opt.to_option @@ Opt.map r to_string
+
+  let set v = storage##setItem(key, string v)
+
+  let init default = match find () with
+    | None -> set default ; default
+    | Some v -> v
+end
+
 (* Application data *)
 module Model = struct
 
@@ -24,7 +46,7 @@ module Model = struct
     visibility : visibility;
   } deriving (Json) (* to save/restore the state in JSON *)
 
-  let empty () = {
+  let empty = {
     tasks = [];
     field = "";
     uid = 0;
@@ -46,10 +68,10 @@ module Model = struct
     | All -> "All"
 
   let from_json s =
-    Json.from_string<t> @@ Js.to_string s
+    Json.from_string<t> s
 
   let to_json m =
-    Js.string @@ Json.to_string<t> m
+    Json.to_string<t> m
 
 end
 
@@ -367,10 +389,7 @@ struct
       | Update_task _ -> ()
       | _ -> View.refresh parent m
     end ;
-    let window = Dom_html.window in
-    let storage = window##localStorage in
-    Js.Optdef.iter storage
-      (fun storage -> storage##setItem(Js.string "jsoo-todo-state", Model.to_json m)) ;
+    Storage.set @@ Model.to_json m ;
     m
 
 end
@@ -382,18 +401,7 @@ let main _ =
       (fun () -> assert false)
   in
   (* restore the saved state or empty state if not found *)
-  let m =
-    let window = Dom_html.window in
-    let storage = window##localStorage in
-    Js.Optdef.case storage
-      (fun () -> Model.empty())
-      (fun storage ->
-        let item = storage##getItem(Js.string "jsoo-todo-state") in
-        Js.Opt.case item
-          (fun () -> Model.empty())
-          (fun v -> Model.from_json (Js.to_string v))
-      )
-  in
+  let m = Model.from_json @@ Storage.init @@ Model.to_json Model.empty in
   (* set the visibility by looking at the current url *)
   let m =
     match Url.Current.get() with
@@ -402,8 +410,8 @@ let main _ =
         let fragment =
           match u with
           | Url.Http h
-          | Url.Https h -> h.Url.hu_fragment
-          | Url.File f -> f.Url.fu_fragment
+          | Url.Https h -> h.hu_fragment
+          | Url.File f -> f.fu_fragment
         in
         match fragment with
         | "/" -> { m with Model.visibility = Model.All }
