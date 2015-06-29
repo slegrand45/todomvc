@@ -137,7 +137,7 @@ module View = struct
       Html5.(input ~a:(
           let l = [
             a_input_type `Checkbox ;
-            a_class ["toogle"] ;
+            a_class ["toggle"] ;
             a_onclick (fun _ ->
               send_some (Check (todo.id, (not todo.completed))); true
             )]
@@ -204,11 +204,11 @@ module View = struct
       | [] -> "visibility: hidden;"
       | _ -> "visibility: visible;"
     in
-    let toogle_input =
+    let toggle_input =
       Html5.(input ~a:(
           let l = [
             a_input_type `Checkbox ;
-            a_class ["toogle-all"] ;
+            a_class ["toggle-all"] ;
             a_onclick (fun _ ->
               send_some (Check_all (not all_completed)) ; true) ;
           ] in
@@ -217,7 +217,7 @@ module View = struct
     in
 
     Html5.(section ~a:[a_class ["main"]; a_style css_visibility] [
-        toogle_input;
+        toggle_input;
         label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"];
         ul ~a:[a_class ["todo-list"]]
           (List.rev_map todo_item (List.filter is_visible tasks))
@@ -278,6 +278,10 @@ module View = struct
           a ~a:[a_href "https://stephanelegrand.wordpress.com/"] [pcdata "Stéphane Legrand"]
         ];
         p [
+          pcdata "Various code improvements from ";
+          a ~a:[a_href "https://github.com/Drup"] [pcdata "Gabriel Radanne"]
+        ];
+        p [
           pcdata "Based on ";
           a ~a:[a_href "https://github.com/evancz"] [pcdata "Elm implementation by Evan Czaplicki"]
         ];
@@ -304,7 +308,7 @@ module View = struct
       Js.Opt.iter (parent##firstChild)
         (fun e -> Dom.removeChild parent e; remove_children ())
     in
-    remove_child () ;
+    remove_children () ;
     Dom.appendChild parent (Tyxml_js.To_dom.of_div (view m))
 
 end
