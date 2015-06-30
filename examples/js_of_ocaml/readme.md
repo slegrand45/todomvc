@@ -32,4 +32,4 @@ Created by [Stéphane Legrand](https://stephanelegrand.wordpress.com/).
 
 Various code improvements from [Gabriel Radanne](https://github.com/Drup).
 
-Based on [Elm implementation](https://github.com/evancz) by Evan Czaplicki.
+Based on Elm implementation by [Evan Czaplicki](https://github.com/evancz).
