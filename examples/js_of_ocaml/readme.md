@@ -30,4 +30,6 @@ If you want to build the application on your own:
 
 Created by [Stéphane Legrand](https://stephanelegrand.wordpress.com/).
 
+Various code improvements from [Gabriel Radanne](https://github.com/Drup).
+
 Based on [Elm implementation](https://github.com/evancz) by Evan Czaplicki.
