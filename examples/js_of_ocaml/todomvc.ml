@@ -1,4 +1,3 @@
-
 open Lwt.Infix
 
 (** Utility module for local storage. *)
