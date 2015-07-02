@@ -91,9 +91,8 @@ module Action = struct
 
 end
 
-(** The user actions are sent in this stream *)
-let stream, (send_in_stream : Action.action option -> unit) = Lwt_stream.create ()
-let send_some x = send_in_stream (Some x)
+(** User actions are sent as events *)
+let event, send_some = React.E.create ()
 
 (** Build HTML and send user actions *)
 module View = struct
@@ -244,7 +243,7 @@ module View = struct
       | _ -> a_footer
     in
     let a_button = [a_class ["clear-completed"]; a_onclick (
-      fun evt -> send_in_stream (Some(Delete_complete)); true;
+      fun evt -> send_some Delete_complete; true;
     )] in
     let a_button =
       match tasks_completed with
@@ -316,7 +315,7 @@ end
 module Controler =
 struct
 
-  let update parent a m =
+  let update parent m a =
     let open Action in
     let open Model in
     let m = match a with
@@ -408,15 +407,8 @@ let main _ =
   in
   (* init the view *)
   let () = View.refresh parent m in
-  (* main loop *)
-  let rec run m =
-    try_lwt
-      lwt a = Lwt_stream.next stream in
-      let m = Controler.update parent a m in
-      run m
-    with
-    | Lwt_stream.Empty -> run m
-  in
-  run m
+  (* start the application *)
+  let _ = React.S.fold (Controler.update parent) m event in
+  Lwt.return ()
 
 let _ = Lwt_js_events.onload () >>= main
