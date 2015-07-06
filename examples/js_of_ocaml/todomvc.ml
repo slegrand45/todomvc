@@ -30,33 +30,33 @@ module Model = struct
     deriving (Json)
 
   type task = {
-    description : string;
+    description : string ;
     (* backup field keep the previous description to restore it when ESC key is pressed *)
-    backup : string;
-    completed : bool;
-    editing : bool;
-    id : int;
+    backup : string ;
+    completed : bool ;
+    editing : bool ;
+    id : int ;
   } deriving (Json)
 
   type t = {
-    tasks : task list;
-    field : string;
-    uid : int;
-    visibility : visibility;
+    tasks : task list ;
+    field : string ;
+    uid : int ;
+    visibility : visibility ;
   } deriving (Json) (* to save/restore the state in JSON *)
 
   let empty = {
-    tasks = [];
-    field = "";
-    uid = 0;
-    visibility = All;
+    tasks = [] ;
+    field = "" ;
+    uid = 0 ;
+    visibility = All ;
   }
 
   let new_task desc id = {
-    description = desc;
-    backup = desc;
-    completed = false;
-    editing = false;
+    description = desc ;
+    backup = desc ;
+    completed = false ;
+    editing = false ;
     id = id
   }
 
@@ -92,7 +92,12 @@ module Action = struct
 end
 
 (** User actions are sent as events *)
-let event, send_some = React.E.create ()
+let event_gui, send_event_gui = React.E.create ()
+
+(** Signals to update view parts *)
+let signal_entry, send_entry = React.S.create ""
+let signal_list, send_list = React.S.create (Model.All, [])
+let signal_controls, send_controls = React.S.create (Model.All, [])
 
 (** Build HTML and send user actions *)
 module View = struct
@@ -100,30 +105,36 @@ module View = struct
   open Action
   open Tyxml_js
 
-
   module Ev = Lwt_js_events
   let bind_event ev elem handler =
     let handler evt _ = handler evt in
     Ev.(async @@ (fun () -> ev elem handler))
 
+  let replace_children parent children =
+    let rec remove () =
+      let first = parent##firstChild in
+        Js.Opt.case first
+          (fun () -> ())
+          (fun e -> Dom.removeChild parent e; remove ())
+    in
+    remove () ;
+    Dom.appendChild parent children
 
   (* New task input field *)
-  let task_entry task =
+  let task_entry =
     let task_input =
       Html5.(input ~a:[
           a_input_type `Text ;
           a_class ["new-todo"] ;
           a_placeholder "What needs to be done?" ;
           a_autofocus `Autofocus ;
-          a_value task ;
-          a_onkeypress (fun evt -> if evt##keyCode = 13 then send_some Add; true) ;
+          a_onkeypress (fun evt -> if evt##keyCode = 13 then send_event_gui Add; true) ;
         ] ())
     in
     let task_input_dom = To_dom.of_input task_input in
-
+    let _ = React.S.map (fun v -> task_input_dom##value <- Js.string v) signal_entry in
     bind_event Ev.inputs task_input_dom (fun _ ->
-      Lwt.return @@ send_some (Update_field task_input_dom##value)) ;
-
+      Lwt.return @@ send_event_gui (Update_field task_input_dom##value)) ;
     Html5.(header ~a:[a_class ["header"]] [
         h1 [ pcdata "todos" ];
         task_input
@@ -137,7 +148,7 @@ module View = struct
             a_input_type `Checkbox ;
             a_class ["toggle"] ;
             a_onclick (fun _ ->
-              send_some (Check (todo.id, (not todo.completed))); true
+              send_event_gui (Check (todo.id, (not todo.completed))) ; true
             )]
           in if todo.completed then a_checked `Checked :: l else l
         ) ())
@@ -150,24 +161,23 @@ module View = struct
           a_value todo.description ;
           a_id (Printf.sprintf "todo-%u" todo.id) ;
           a_onblur (fun _ ->
-            send_some (Editing_task (todo.Model.id, false)); true ) ;
+            send_event_gui (Editing_task (todo.Model.id, false)); true ) ;
         ] ())
     in
     let input_edit_dom = To_dom.of_input input_edit in
 
     bind_event Ev.inputs input_edit_dom (fun _ ->
-      Lwt.return @@ send_some (Update_task (todo.id, input_edit_dom##value))) ;
+      Lwt.return @@ send_event_gui (Update_task (todo.id, input_edit_dom##value))) ;
 
     let keypress_handler evt =
       if evt##keyCode = 13 then
-        send_some (Editing_task (todo.id, false))
+        send_event_gui (Editing_task (todo.id, false))
       else if evt##keyCode = 27 then
-        send_some (Action.Escape todo.id)
+        send_event_gui (Action.Escape todo.id)
       else () ;
       Lwt.return_unit
     in
     bind_event Ev.keypresses input_edit_dom keypress_handler ;
-
 
     let css_class l =
       let l = if todo.completed then "completed"::l else l in
@@ -176,17 +186,16 @@ module View = struct
 
     Html5.(li ~a:[a_class (css_class [])] [
       div ~a:[a_class ["view"]] [
-        input_check;
+        input_check ;
         label ~a:[a_ondblclick (
-            fun evt -> send_some (Editing_task (todo.id, true)); true;
-          )] [pcdata todo.Model.description];
+            fun evt -> send_event_gui (Editing_task (todo.id, true)) ; true ;
+          )] [pcdata todo.Model.description] ;
         button ~a:[a_class ["destroy"]; a_onclick (
-            fun evt -> send_some (Delete todo.Model.id); true;
+            fun evt -> send_event_gui (Delete todo.Model.id); true;
           )] []
       ];
-      input_edit;
+      input_edit ;
     ])
-
 
   (** Build the tasks list *)
   let task_list visibility tasks =
@@ -208,15 +217,14 @@ module View = struct
             a_input_type `Checkbox ;
             a_class ["toggle-all"] ;
             a_onclick (fun _ ->
-              send_some (Check_all (not all_completed)) ; true) ;
+              send_event_gui (Check_all (not all_completed)) ; true) ;
           ] in
           if all_completed then a_checked `Checked :: l else l
         ) ())
     in
-
-    Html5.(section ~a:[a_class ["main"]; a_style css_visibility] [
-        toggle_input;
-        label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"];
+    Html5.(section ~a:[a_class ["main"] ; a_style css_visibility] [
+        toggle_input ;
+        label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"] ;
         ul ~a:[a_class ["todo-list"]]
           (List.rev_map todo_item (List.filter is_visible tasks))
       ])
@@ -226,7 +234,7 @@ module View = struct
       if visibility = actual_visibility then ["selected"] else []
     in
     Html5.(li ~a:[a_onclick (fun evt ->
-        send_some (Change_visibility visibility); true;
+        send_event_gui (Change_visibility visibility); true;
       )] [
         a ~a:[a_href uri; a_class css]
           [pcdata (Model.string_of_visibility visibility)]
@@ -242,8 +250,8 @@ module View = struct
       | [] -> (a_hidden `Hidden) :: a_footer
       | _ -> a_footer
     in
-    let a_button = [a_class ["clear-completed"]; a_onclick (
-      fun evt -> send_some Delete_complete; true;
+    let a_button = [a_class ["clear-completed"] ; a_onclick (
+      fun evt -> send_event_gui Delete_complete ; true ;
     )] in
     let a_button =
       match tasks_completed with
@@ -270,45 +278,55 @@ module View = struct
 
   let info_footer =
     Html5.(footer ~a:[a_class ["info"]] [
-        p [pcdata "Double-click to edit a todo"];
+        p [pcdata "Double-click to edit a todo"] ;
         p [
-          pcdata "Written by ";
+          pcdata "Written by " ;
           a ~a:[a_href "https://stephanelegrand.wordpress.com/"] [pcdata "Stéphane Legrand"]
         ];
         p [
-          pcdata "Various code improvements from ";
+          pcdata "Various code improvements from " ;
           a ~a:[a_href "https://github.com/Drup"] [pcdata "Gabriel Radanne"]
         ];
         p [
-          pcdata "Based on ";
+          pcdata "Based on " ;
           a ~a:[a_href "https://github.com/evancz"] [pcdata "Elm implementation by Evan Czaplicki"]
         ];
         p [
-          pcdata "Part of ";
+          pcdata "Part of " ;
           a ~a:[a_href "http://todomvc.com"] [pcdata "TodoMVC"]
         ]
       ])
 
   (** Build the HTML for the application *)
   let view m =
+    let tl = task_list m.Model.visibility m.Model.tasks in
+    let tl_parent = Html5.(div [tl]) in
+    let _ = React.S.map (fun (visibility, tasks) ->
+        replace_children (To_dom.of_div tl_parent) (To_dom.of_section (task_list visibility tasks))
+      ) signal_list
+    in
+
+    let ctrl = controls m.Model.visibility m.Model.tasks in
+    let ctrl_parent = Html5.(div [ctrl]) in
+    let _ = React.S.map (fun (visibility, tasks) ->
+        replace_children (To_dom.of_div ctrl_parent) (To_dom.of_section (controls visibility tasks))
+      ) signal_controls
+    in
+
     Html5.(
       div ~a:[a_class ["todomvc-wrapper"]] [
         section ~a:[a_class ["todoapp"]] [
-          task_entry m.Model.field;
-          task_list m.Model.visibility m.Model.tasks;
-          controls m.Model.visibility m.Model.tasks
+          task_entry ;
+          tl_parent ;
+          ctrl_parent
         ];
         info_footer
       ])
 
-  let refresh parent m =
-    let rec remove_children () =
-      Js.Opt.iter (parent##firstChild)
-        (fun e -> Dom.removeChild parent e; remove_children ())
-    in
-    remove_children () ;
-    Dom.appendChild parent (Tyxml_js.To_dom.of_div (view m))
-
+  let refresh_all m =
+    send_entry m.Model.field ;
+    send_list (m.Model.visibility, m.Model.tasks) ;
+    send_controls (m.Model.visibility, m.Model.tasks)
 end
 
 (** Manage actions, refresh view if needed and save the state in local storage *)
@@ -326,15 +344,14 @@ struct
           if v = "" then m.tasks
           else (new_task v m.uid) :: m.tasks
         in
-        { m with uid = uid; field = ""; tasks = tasks }
-
+        { m with uid = uid; field = "" ; tasks = tasks }
       | Update_field field ->
         { m with field = Js.to_string field }
       | Editing_task (id, is_edit) ->
         let update_task t =
           if (t.id = id) then
             let v = String.trim t.description in
-            { t with editing = is_edit; description = v; backup = v }
+            { t with editing = is_edit ; description = v ; backup = v }
           else t
         in
         let l = List.map update_task m.tasks in
@@ -365,19 +382,18 @@ struct
         { m with visibility = visibility }
       | Escape id ->
         let unedit_task t =
-          if (t.id = id) then { t with editing = false; description = t.backup }
+          if (t.id = id) then { t with editing = false ; description = t.backup }
           else t
         in
         { m with tasks = List.map unedit_task m.tasks }
     in
     begin match a with
-      | Update_field _
       | Update_task _ -> ()
-      | _ -> View.refresh parent m
+      | Update_field _ -> send_entry m.Model.field ;
+      | _ -> View.refresh_all m ;
     end ;
     Storage.set @@ Model.to_json m ;
     m
-
 end
 
 let main _ =
@@ -406,9 +422,10 @@ let main _ =
       | _ -> m
   in
   (* init the view *)
-  let () = View.refresh parent m in
+  let () = View.replace_children parent (Tyxml_js.To_dom.of_div (View.view m)) in
+  let () = View.refresh_all m in
   (* start the application *)
-  let _ = React.S.fold (Controler.update parent) m event in
+  let _ = React.S.fold (Controler.update parent) m event_gui in
   Lwt.return ()
 
 let _ = Lwt_js_events.onload () >>= main
