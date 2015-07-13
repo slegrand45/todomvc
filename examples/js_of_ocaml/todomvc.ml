@@ -1,5 +1,7 @@
 open Lwt.Infix
 
+module RList = ReactiveData.RList
+
 (** Utility module for local storage. *)
 module Storage = struct
   open Js
@@ -51,6 +53,8 @@ module Model = struct
     uid = 0 ;
     visibility = All ;
   }
+
+  let rl, rhandle = RList.make empty.tasks
 
   let new_task desc id = {
     description = desc ;
@@ -222,6 +226,10 @@ module View = struct
           if all_completed then a_checked `Checked :: l else l
         ) ())
     in
+
+    let rl_tasks, rhandle = RList.make (List.filter is_visible tasks) in
+    let li_rl_tasks = RList.map (fun e -> todo_item e) (rl_tasks) in
+
     Html5.(section ~a:[a_class ["main"] ; a_style css_visibility] [
         toggle_input ;
         label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"] ;
@@ -313,6 +321,9 @@ module View = struct
       ) signal_controls
     in
 
+    let li_rl = RList.map (fun x -> todo_item x) Model.rl in 
+    let ul_elt = Tyxml_js.R.Html5.ul li_rl in 
+
     Html5.(
       div ~a:[a_class ["todomvc-wrapper"]] [
         section ~a:[a_class ["todoapp"]] [
@@ -320,6 +331,7 @@ module View = struct
           tl_parent ;
           ctrl_parent
         ];
+        ul_elt;
         info_footer
       ])
 
@@ -339,11 +351,13 @@ struct
     let m = match a with
       | Add ->
         let uid = m.uid + 1 in
-        let tasks =
-          let v = String.trim m.field in
+        let v = String.trim m.field in
+        let nt = new_task v m.uid in
+        let tasks =          
           if v = "" then m.tasks
-          else (new_task v m.uid) :: m.tasks
+          else nt :: m.tasks
         in
+        let _ = RList.append nt Model.rhandle in
         { m with uid = uid; field = "" ; tasks = tasks }
       | Update_field field ->
         { m with field = Js.to_string field }
