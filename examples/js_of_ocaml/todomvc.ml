@@ -1,9 +1,18 @@
 open Lwt.Infix
 
-module RList = ReactiveData.RList
+module ReactList = struct
+
+    let list t =
+      let open ReactiveData.RList in
+      make_from
+      (React.S.value t)
+      (React.E.map (fun e -> Set e) (React.S.changes t))
+
+end
 
 (** Utility module for local storage. *)
 module Storage = struct
+
   open Js
 
   let storage =
@@ -22,6 +31,7 @@ module Storage = struct
   let init default = match find () with
     | None -> set default ; default
     | Some v -> v
+
 end
 
 (** Application data *)
@@ -54,8 +64,6 @@ module Model = struct
     visibility = All ;
   }
 
-  let rl, rhandle = RList.make empty.tasks
-
   let new_task desc id = {
     description = desc ;
     backup = desc ;
@@ -78,6 +86,10 @@ module Model = struct
 
 end
 
+type rs = Model.t React.signal
+type rf = ?step:React.step -> Model.t -> unit
+type rp = rs * rf
+
 (** User interface actions *)
 module Action = struct
 
@@ -95,269 +107,22 @@ module Action = struct
 
 end
 
-(** User actions are sent as events *)
-let event_gui, send_event_gui = React.E.create ()
-
-(** Signals to update view parts *)
-let signal_entry, send_entry = React.S.create ""
-let signal_list, send_list = React.S.create (Model.All, [])
-let signal_controls, send_controls = React.S.create (Model.All, [])
-
-(** Build HTML and send user actions *)
-module View = struct
-
-  open Action
-  open Tyxml_js
-
-  module Ev = Lwt_js_events
-  let bind_event ev elem handler =
-    let handler evt _ = handler evt in
-    Ev.(async @@ (fun () -> ev elem handler))
-
-  let replace_children parent children =
-    let rec remove () =
-      let first = parent##firstChild in
-        Js.Opt.case first
-          (fun () -> ())
-          (fun e -> Dom.removeChild parent e; remove ())
-    in
-    remove () ;
-    Dom.appendChild parent children
-
-  (* New task input field *)
-  let task_entry =
-    let task_input =
-      Html5.(input ~a:[
-          a_input_type `Text ;
-          a_class ["new-todo"] ;
-          a_placeholder "What needs to be done?" ;
-          a_autofocus `Autofocus ;
-          a_onkeypress (fun evt -> if evt##keyCode = 13 then send_event_gui Add; true) ;
-        ] ())
-    in
-    let task_input_dom = To_dom.of_input task_input in
-    let _ = React.S.map (fun v -> task_input_dom##value <- Js.string v) signal_entry in
-    bind_event Ev.inputs task_input_dom (fun _ ->
-      Lwt.return @@ send_event_gui (Update_field task_input_dom##value)) ;
-    Html5.(header ~a:[a_class ["header"]] [
-        h1 [ pcdata "todos" ];
-        task_input
-      ])
-
-  (** One item in the tasks list *)
-  let todo_item (todo:Model.task) =
-    let input_check =
-      Html5.(input ~a:(
-          let l = [
-            a_input_type `Checkbox ;
-            a_class ["toggle"] ;
-            a_onclick (fun _ ->
-              send_event_gui (Check (todo.id, (not todo.completed))) ; true
-            )]
-          in if todo.completed then a_checked `Checked :: l else l
-        ) ())
-    in
-
-    let input_edit =
-      Html5.(input ~a:[
-          a_input_type `Text ;
-          a_class ["edit"] ;
-          a_value todo.description ;
-          a_id (Printf.sprintf "todo-%u" todo.id) ;
-          a_onblur (fun _ ->
-            send_event_gui (Editing_task (todo.Model.id, false)); true ) ;
-        ] ())
-    in
-    let input_edit_dom = To_dom.of_input input_edit in
-
-    bind_event Ev.inputs input_edit_dom (fun _ ->
-      Lwt.return @@ send_event_gui (Update_task (todo.id, input_edit_dom##value))) ;
-
-    let keypress_handler evt =
-      if evt##keyCode = 13 then
-        send_event_gui (Editing_task (todo.id, false))
-      else if evt##keyCode = 27 then
-        send_event_gui (Action.Escape todo.id)
-      else () ;
-      Lwt.return_unit
-    in
-    bind_event Ev.keypresses input_edit_dom keypress_handler ;
-
-    let css_class l =
-      let l = if todo.completed then "completed"::l else l in
-      if todo.editing then "editing"::l else l
-    in
-
-    Html5.(li ~a:[a_class (css_class [])] [
-      div ~a:[a_class ["view"]] [
-        input_check ;
-        label ~a:[a_ondblclick (
-            fun evt -> send_event_gui (Editing_task (todo.id, true)) ; true ;
-          )] [pcdata todo.Model.description] ;
-        button ~a:[a_class ["destroy"]; a_onclick (
-            fun evt -> send_event_gui (Delete todo.Model.id); true;
-          )] []
-      ];
-      input_edit ;
-    ])
-
-  (** Build the tasks list *)
-  let task_list visibility tasks =
-    let is_visible todo =
-      match visibility with
-      | Model.Completed -> todo.Model.completed
-      | Active -> not todo.completed
-      | All -> true
-    in
-    let all_completed = List.for_all (fun e -> e.Model.completed) tasks in
-    let css_visibility =
-      match tasks with
-      | [] -> "visibility: hidden;"
-      | _ -> "visibility: visible;"
-    in
-    let toggle_input =
-      Html5.(input ~a:(
-          let l = [
-            a_input_type `Checkbox ;
-            a_class ["toggle-all"] ;
-            a_onclick (fun _ ->
-              send_event_gui (Check_all (not all_completed)) ; true) ;
-          ] in
-          if all_completed then a_checked `Checked :: l else l
-        ) ())
-    in
-
-    let rl_tasks, rhandle = RList.make (List.filter is_visible tasks) in
-    let li_rl_tasks = RList.map (fun e -> todo_item e) (rl_tasks) in
-
-    Html5.(section ~a:[a_class ["main"] ; a_style css_visibility] [
-        toggle_input ;
-        label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"] ;
-        ul ~a:[a_class ["todo-list"]]
-          (List.rev_map todo_item (List.filter is_visible tasks))
-      ])
-
-  let visibility_swap uri visibility actual_visibility =
-    let css =
-      if visibility = actual_visibility then ["selected"] else []
-    in
-    Html5.(li ~a:[a_onclick (fun evt ->
-        send_event_gui (Change_visibility visibility); true;
-      )] [
-        a ~a:[a_href uri; a_class css]
-          [pcdata (Model.string_of_visibility visibility)]
-      ])
-
-  let controls visibility tasks =
-    let open Html5 in
-    let tasks_completed, tasks_left = List.partition (fun e -> e.Model.completed) tasks in
-    let item = if (List.length tasks_left = 1) then " item" else " items" in
-    let a_footer = [a_class ["footer"]] in
-    let a_footer =
-      match tasks with
-      | [] -> (a_hidden `Hidden) :: a_footer
-      | _ -> a_footer
-    in
-    let a_button = [a_class ["clear-completed"] ; a_onclick (
-      fun evt -> send_event_gui Delete_complete ; true ;
-    )] in
-    let a_button =
-      match tasks_completed with
-      | [] -> (a_hidden `Hidden) :: a_button
-      | _ -> a_button
-    in
-    let html =
-      footer ~a:a_footer [
-        span ~a:[a_class ["todo-count"]] [
-          strong ~a:[] [pcdata (string_of_int (List.length tasks_left))];
-          pcdata (item ^ " left")
-        ];
-        ul ~a:[a_class ["filters"]] [
-          visibility_swap "#/" Model.All visibility;
-          visibility_swap "#/active" Model.Active visibility;
-          visibility_swap "#/completed" Model.Completed visibility;
-        ];
-        button ~a:a_button [
-          pcdata (Printf.sprintf "Clear completed (%u)" (List.length tasks_completed))
-        ]
-      ]
-    in
-    html
-
-  let info_footer =
-    Html5.(footer ~a:[a_class ["info"]] [
-        p [pcdata "Double-click to edit a todo"] ;
-        p [
-          pcdata "Written by " ;
-          a ~a:[a_href "https://stephanelegrand.wordpress.com/"] [pcdata "Stéphane Legrand"]
-        ];
-        p [
-          pcdata "Various code improvements from " ;
-          a ~a:[a_href "https://github.com/Drup"] [pcdata "Gabriel Radanne"]
-        ];
-        p [
-          pcdata "Based on " ;
-          a ~a:[a_href "https://github.com/evancz"] [pcdata "Elm implementation by Evan Czaplicki"]
-        ];
-        p [
-          pcdata "Part of " ;
-          a ~a:[a_href "http://todomvc.com"] [pcdata "TodoMVC"]
-        ]
-      ])
-
-  (** Build the HTML for the application *)
-  let view m =
-    let tl = task_list m.Model.visibility m.Model.tasks in
-    let tl_parent = Html5.(div [tl]) in
-    let _ = React.S.map (fun (visibility, tasks) ->
-        replace_children (To_dom.of_div tl_parent) (To_dom.of_section (task_list visibility tasks))
-      ) signal_list
-    in
-
-    let ctrl = controls m.Model.visibility m.Model.tasks in
-    let ctrl_parent = Html5.(div [ctrl]) in
-    let _ = React.S.map (fun (visibility, tasks) ->
-        replace_children (To_dom.of_div ctrl_parent) (To_dom.of_section (controls visibility tasks))
-      ) signal_controls
-    in
-
-    let li_rl = RList.map (fun x -> todo_item x) Model.rl in 
-    let ul_elt = Tyxml_js.R.Html5.ul li_rl in 
-
-    Html5.(
-      div ~a:[a_class ["todomvc-wrapper"]] [
-        section ~a:[a_class ["todoapp"]] [
-          task_entry ;
-          tl_parent ;
-          ctrl_parent
-        ];
-        ul_elt;
-        info_footer
-      ])
-
-  let refresh_all m =
-    send_entry m.Model.field ;
-    send_list (m.Model.visibility, m.Model.tasks) ;
-    send_controls (m.Model.visibility, m.Model.tasks)
-end
-
 (** Manage actions, refresh view if needed and save the state in local storage *)
-module Controler =
-struct
+module Controler = struct
 
-  let update parent m a =
+  let update a ((r, f) : rp) =
     let open Action in
     let open Model in
-    let m = match a with
+    let m = React.S.value r in
+    let m =
+      match a with
       | Add ->
         let uid = m.uid + 1 in
-        let v = String.trim m.field in
-        let nt = new_task v m.uid in
-        let tasks =          
+        let tasks =
+          let v = String.trim m.field in
           if v = "" then m.tasks
-          else nt :: m.tasks
+          else (new_task v m.uid) :: m.tasks
         in
-        let _ = RList.append nt Model.rhandle in
         { m with uid = uid; field = "" ; tasks = tasks }
       | Update_field field ->
         { m with field = Js.to_string field }
@@ -401,13 +166,228 @@ struct
         in
         { m with tasks = List.map unedit_task m.tasks }
     in
-    begin match a with
-      | Update_task _ -> ()
-      | Update_field _ -> send_entry m.Model.field ;
-      | _ -> View.refresh_all m ;
-    end ;
     Storage.set @@ Model.to_json m ;
-    m
+    f m
+
+end
+
+(** Build HTML and send user actions *)
+module View = struct
+
+  open Action
+  open Tyxml_js
+
+  module Ev = Lwt_js_events
+  let bind_event ev elem handler =
+    let handler evt _ = handler evt in
+    Ev.(async @@ (fun () -> ev elem handler))
+
+  (* New task input field *)
+  let task_entry ((r, f) : rp) =
+    let task_input =
+      Html5.(input ~a:[
+          a_input_type `Text ;
+          a_class ["new-todo"] ;
+          a_placeholder "What needs to be done?" ;
+          a_autofocus `Autofocus ;
+          R.Html5.a_value (React.S.map (fun m -> m.Model.field) r) ;
+          a_onkeypress (fun evt -> if evt##keyCode = 13 then (Controler.update Add (r, f)); true) ;
+        ] ())
+    in
+    let task_input_dom = To_dom.of_input task_input in
+
+    bind_event Ev.inputs task_input_dom (fun _ ->
+      Lwt.return @@ (Controler.update (Update_field task_input_dom##value) (r, f))) ;
+
+    Html5.(header ~a:[a_class ["header"]] [
+        h1 [ pcdata "todos" ];
+        task_input
+      ])
+
+  (** One item in the tasks list *)
+  let todo_item ((r, f) : rp) acc (todo:Model.task) =
+    let input_check =
+      Html5.(input ~a:(
+          let l = [
+            a_input_type `Checkbox ;
+            a_class ["toggle"] ;
+            a_onclick (fun _ ->
+              (Controler.update (Check (todo.id, (not todo.completed))) (r, f)); true
+            )]
+          in if todo.completed then a_checked `Checked :: l else l
+        ) ())
+    in
+
+    let key_handler evt =
+      if evt##keyCode = 13 then (
+        let tgt = Dom_html.CoerceTo.input(Dom.eventTarget evt) in
+        Js.Opt.case tgt (fun () -> ()) (fun e -> Controler.update (Update_task (todo.id, e##value)) (r, f)) ;
+        Controler.update (Editing_task (todo.id, false)) (r, f) ;
+        true
+      )
+      else if evt##keyCode = 27 then (Controler.update (Action.Escape todo.id) (r, f); true)
+      else true
+    in
+
+    let input_edit ((r, f) : rp) =
+      Html5.(input ~a:[
+          a_input_type `Text ;
+          a_class ["edit"] ;
+          a_value todo.description ;
+          a_id (Printf.sprintf "todo-%u" todo.id) ;
+          a_onblur (fun _ ->
+            (Controler.update (Editing_task (todo.Model.id, false)) (r, f)); true ) ;
+          a_onchange (fun evt ->
+            let tgt = Dom_html.CoerceTo.input(Dom.eventTarget evt) in
+            Js.Opt.case tgt (fun () -> true) (fun e -> Controler.update (Update_task (todo.id, e##value)) (r, f); true)) ;
+          a_onkeypress (fun evt -> key_handler evt) ;
+          a_onkeydown (fun evt -> key_handler evt) ;
+        ] ())
+    in
+
+    let css_class l =
+      let l = if todo.completed then "completed"::l else l in
+      if todo.editing then "editing"::l else l
+    in
+
+    Html5.(li ~a:[a_class (css_class [])] [
+      div ~a:[a_class ["view"]] [
+        input_check;
+        label ~a:[a_ondblclick (
+            fun evt -> (Controler.update (Editing_task (todo.id, true)) (r, f)); true;
+          )] [pcdata todo.Model.description];
+        button ~a:[a_class ["destroy"]; a_onclick (
+            fun evt -> (Controler.update (Delete todo.Model.id) (r, f)); true;
+          )] []
+      ];
+      input_edit (r, f);
+    ]) :: acc
+
+  (** Build the tasks list *)
+  let task_list ((r, f) : rp) =
+    let css_visibility m =
+      let tasks = m.Model.tasks in
+      match tasks with
+      | [] -> "visibility: hidden;"
+      | _ -> "visibility: visible;"
+    in
+    let toggle_input_checked m =
+      let tasks = m.Model.tasks in
+      List.for_all (fun e -> e.Model.completed) tasks
+    in
+    let visible_tasks m =
+      let visibility = m.Model.visibility in
+      let is_visible todo =
+        match visibility with
+        | Model.Completed -> todo.Model.completed
+        | Active -> not todo.completed
+        | All -> true
+      in
+      let tasks = List.filter is_visible m.Model.tasks in
+      List.rev(List.fold_left (todo_item (r, f)) [] tasks)
+    in
+    let rl = ReactList.list (React.S.map visible_tasks r) in
+    Html5.(section ~a:[a_class ["main"]; R.Html5.a_style (React.S.map css_visibility r) ] [
+      Html5.input ~a:( (R.filter_attrib (a_checked `Checked) (React.S.map toggle_input_checked r)) :: [
+          a_input_type `Checkbox ;
+          a_class ["toggle-all"] ;
+          a_onclick (fun _ ->
+            Controler.update (Check_all (not (toggle_input_checked (React.S.value r)))) (r, f) ; true) ;
+        ]) () ;
+      label ~a:[a_for "toggle-all"] [pcdata "Mark all as complete"] ;
+      R.Html5.ul ~a:[a_class ["todo-list"]] rl
+    ])
+
+  let visibility_swap m ((r, f) : rp) acc (uri, visibility)  =
+    let actual_visibility = m.Model.visibility in
+    let css =
+      if visibility = actual_visibility then ["selected"] else []
+    in
+    Html5.(li ~a:[a_onclick (fun _ -> Controler.update (Change_visibility visibility) (r, f); true)] [
+        a ~a:[a_href uri; a_class css]
+          [pcdata (Model.string_of_visibility visibility)]
+      ]) :: acc
+
+  let controls ((r, f) : rp) =
+    let open Html5 in
+    let footer_hidden m =
+      let tasks = m.Model.tasks in
+      match tasks with
+      | [] -> true
+      | _ -> false
+    in
+    let a_button = [a_class ["clear-completed"]; a_onclick (
+      fun evt -> (Controler.update (Delete_complete) (r, f)); true;
+    )] in
+    let button_hidden m =
+      let tasks = m.Model.tasks in
+      let tasks_completed, _ = List.partition (fun e -> e.Model.completed) tasks in
+      match tasks_completed with
+      | [] -> true
+      | _ -> false
+    in
+    let nb_left m =
+      let tasks = m.Model.tasks in
+      let _, tasks_left = List.partition (fun e -> e.Model.completed) tasks in
+      string_of_int (List.length tasks_left)
+    in
+    let item_left m =
+      let tasks = m.Model.tasks in
+      let _, tasks_left = List.partition (fun e -> e.Model.completed) tasks in
+      if (List.length tasks_left = 1) then " item left" else " items left"
+    in
+    let vswap m =
+      List.rev(List.fold_left (visibility_swap m (r, f)) []
+        [("#/", Model.All); ("#/active", Model.Active); ("#/completed", Model.Completed)])
+    in
+    let html =
+      footer ~a:[a_class ["footer"]; (R.filter_attrib (a_hidden `Hidden) (React.S.map footer_hidden r))] [
+        span ~a:[a_class ["todo-count"]] [
+          strong ~a:[] [R.Html5.pcdata (React.S.map nb_left r)] ;
+          R.Html5.pcdata (React.S.map item_left r)
+        ];
+        R.Html5.ul ~a:[a_class ["filters"]]
+          (ReactList.list (React.S.map vswap r)) ;
+        button ~a:((R.filter_attrib (a_hidden `Hidden) (React.S.map button_hidden r)) :: a_button) [
+          pcdata "Clear completed"
+        ];
+      ]
+    in
+    html
+
+  let info_footer =
+    Html5.(footer ~a:[a_class ["info"]] [
+        p [pcdata "Double-click to edit a todo"] ;
+        p [
+          pcdata "Written by " ;
+          a ~a:[a_href "https://stephanelegrand.wordpress.com/"] [pcdata "Stéphane Legrand"]
+        ];
+        p [
+          pcdata "Various code improvements from " ;
+          a ~a:[a_href "https://github.com/Drup"] [pcdata "Gabriel Radanne"]
+        ];
+        p [
+          pcdata "Based on " ;
+          a ~a:[a_href "https://github.com/evancz"] [pcdata "Elm implementation by Evan Czaplicki"]
+        ];
+        p [
+          pcdata "Part of " ;
+          a ~a:[a_href "http://todomvc.com"] [pcdata "TodoMVC"]
+        ]
+      ])
+
+  (** Build the HTML for the application *)
+  let view (r, f) =
+    Html5.(
+      div ~a:[a_class ["todomvc-wrapper"]] [
+        section ~a:[a_class ["todoapp"]] [
+          task_entry (r, f) ;
+          task_list (r, f) ;
+          controls (r, f)
+        ];
+        info_footer
+      ])
+
 end
 
 let main _ =
@@ -435,11 +415,8 @@ let main _ =
       | "/completed" -> { m with Model.visibility = Model.Completed }
       | _ -> m
   in
-  (* init the view *)
-  let () = View.replace_children parent (Tyxml_js.To_dom.of_div (View.view m)) in
-  let () = View.refresh_all m in
-  (* start the application *)
-  let _ = React.S.fold (Controler.update parent) m event_gui in
+  let rp = React.S.create m in
+  Dom.appendChild parent (Tyxml_js.To_dom.of_div (View.view rp)) ;
   Lwt.return ()
 
 let _ = Lwt_js_events.onload () >>= main
